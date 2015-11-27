@@ -1,11 +1,8 @@
 #include <ESP8266httpUpdate.h>
-
 #include <IRremoteESP8266.h>
 #include <Event.h>
 #include <Timer.h>
 #include <DHT.h>
-//#include <RestClient.h>
-//#include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <Client.h>
 #include <EEPROM.h>
@@ -18,12 +15,19 @@
 
 #include <Hash.h>
 
-WebSocketsClient webSocket;
-
-#define DHTPIN 0     // what digital pin we're connected to
 
 
-#define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
+#define DHTPIN 0
+#define DHTTYPE DHT22
+#define RF_DATA_PIN 3
+#define IR_RECV_PIN 2
+
+#define WS_SERVER "dmarkey.com"
+#define WS_PATH "/ws"
+#define WS_PORT 8080
+
+
+
 
 #define page "<html> <body> <form action='.' method='post'>  SSID: <input type='text' name='ssid'><br>  Password: <input type='password' name='password'><br>  <input type='submit' value='Submit'></form></body></html>"
 
@@ -34,22 +38,18 @@ const char* ssid = "";
 const char* password = "";
 //MDNSResponder mdns;
 
+WebSocketsClient webSocket;
+
 DHT dht(DHTPIN, DHTTYPE);
 Timer t;
 
 ESP8266WebServer server(80);
 WiFiClient espClient;
 WiFiClient webClient;
-//RestClient restClient("dmarkey.com", 8080);
-//PubSubClient client(espClient);
 
 
-short rc_pin = 3;
 
-int RECV_PIN = 2;
-
-
-IRrecv irrecv(RECV_PIN);
+IRrecv irrecv(IR_RECV_PIN);
 
 
 #define ch1on "10110000000000010001"
@@ -73,7 +73,7 @@ IRrecv irrecv(RECV_PIN);
 
 
 
-boolean sendCode(char code[]) { //empfange den Code in Form eines Char[]
+boolean sendCode(const char code[]) { //empfange den Code in Form eines Char[]
   sendSymbol('x');
   for (short z = 0; z < 7; z++) { //wiederhole den Code 7x
     for (short i = 0; i < 20; i++) { //ein Code besteht aus 20bits
@@ -87,25 +87,25 @@ void sendSymbol(char i) { //Diese Funktion soll 0,1 oder x senden koennen. Wir s
   switch (i) { //nun gucken wir was i ist
     case '0':
       { //Der Code fuer '0'
-        digitalWrite(rc_pin, LOW);
+        digitalWrite(RF_DATA_PIN, LOW);
         delayMicroseconds(600);
-        digitalWrite(rc_pin, HIGH);
+        digitalWrite(RF_DATA_PIN, HIGH);
         delayMicroseconds(1400);
         return;
       }
     case '1':
       { //Der Code fuer '1'
-        digitalWrite(rc_pin, LOW);
+        digitalWrite(RF_DATA_PIN, LOW);
         delayMicroseconds(1300);
-        digitalWrite(rc_pin, HIGH);
+        digitalWrite(RF_DATA_PIN, HIGH);
         delayMicroseconds(700);
         return;
       }
     case 'x':
       { //Der Code fuer x(sync)
-        digitalWrite(rc_pin, LOW);
+        digitalWrite(RF_DATA_PIN, LOW);
         delay(81);
-        digitalWrite(rc_pin, HIGH);
+        digitalWrite(RF_DATA_PIN, HIGH);
         delayMicroseconds(800);
       }
 
@@ -114,11 +114,6 @@ void sendSymbol(char i) { //Diese Funktion soll 0,1 oder x senden koennen. Wir s
 
 
 int connected = false;
-
-const int led = 13;
-
-#define RF_DATA_PIN    3
-
 
 
 #define MAX_CODE_CYCLES 4
@@ -142,25 +137,25 @@ enum {
 
 unsigned long signals[PLUG_LAST][2][MAX_CODE_CYCLES] = {
   { /*A*/
-    {0b101111000001000101011100, 0b101100010110110110101100, 0b101110101110010001101100, 0b101101000101010100011100}, 
+    {0b101111000001000101011100, 0b101100010110110110101100, 0b101110101110010001101100, 0b101101000101010100011100},
     {0b101101010010011101111100, 0b101111100011110000101100, 0b101111110111001110001100, 0b101110111000101110111100}
-  },  
+  },
   { /*B*/
-    {0b101101110100001000110101, 0b101101101010100111100101, 0b101110011101111000000101, 0b101100100000100011110101}, 
+    {0b101101110100001000110101, 0b101101101010100111100101, 0b101110011101111000000101, 0b101100100000100011110101},
     {0b101111011001101011010101, 0b101100111011111101000101, 0b101110001100011010010101, 0b101100001111000011000101}
-  },  
+  },
   { /*C*/
     {0b101101010010011101111110, 0b101111100011110000101110, 0b101111110111001110001110, 0b101110111000101110111110},
-    {0b101110101110010001101110, 0b101101000101010100011110, 0b101111000001000101011110, 0b101100010110110110101110} 
-  },  
+    {0b101110101110010001101110, 0b101101000101010100011110, 0b101111000001000101011110, 0b101100010110110110101110}
+  },
   { /*D*/
-    {0b101111011001101011010111, 0b101100111011111101000111, 0b101100001111000011000111, 0b101110001100011010010111}, 
+    {0b101111011001101011010111, 0b101100111011111101000111, 0b101100001111000011000111, 0b101110001100011010010111},
     {0b101101110100001000110111, 0b101100100000100011110111, 0b101101101010100111100111, 0b101110011101111000000111}
-  },  
+  },
   { /*MASTER*/
-    {0b101111100011110000100010, 0b101110111000101110110010, 0b101101010010011101110010, 0b101111110111001110000010}, 
+    {0b101111100011110000100010, 0b101110111000101110110010, 0b101101010010011101110010, 0b101111110111001110000010},
     {0b101111000001000101010010, 0b101101000101010100010010, 0b101110101110010001100010, 0b101100010110110110100010}
-  },  
+  },
 };
 
 boolean       onOff;
@@ -222,36 +217,6 @@ void ActivatePlug(unsigned char PlugNo, boolean On) {
   Serial.println(PlugNo);
 }
 
-
-
-
-
-
-String mqttNameCmd() {
-  String name;
-  int id = ESP.getChipId();
-  name = "SmartController-";
-  name  += id;
-  return name;
-}
-
-
-String commandTopicCmd() {
-  String topic;
-  int id = ESP.getChipId();
-  topic = "/smart_plug_work/SmartPlug-";
-  topic  = topic + id;
-  return topic;
-}
-
-
-
-String commandTopic = commandTopicCmd();
-
-String mqttName = mqttNameCmd();
-
-
-
 String eeprom_read() {
   String tempStr;
   for (int i = 0; i < 512; i++) {
@@ -309,25 +274,6 @@ void handleNotFound() {
 
 }
 
-
-/*void beaconFunc() {
-  restClient.setClient(&webClient);
-  String post_data;
-  post_data = "model=SmartController-8RFT&controller_id=";
-  post_data += ESP.getChipId();
-  post_data += "\r\n";
-  //espClient2.connect("dmarkey.com", 80);
-  int resp = restClient.post("/controller_ping_create/", post_data.c_str(), NULL);
-
-  Serial.print("REST Response:");
-  Serial.println(resp);
-
-  //queue_web_request("http://dmarkey.com:8080/controller_ping_create/", post_data);
-  //hc.setPostBody(post_data);
-  //hc.downloadString("http://dmarkey.com:8080/controller_ping_create/", processBeaconResponse);
-}*/
-
-
 void setTaskStatus(char * task_id, int status) {
 
   Serial.println(task_id);
@@ -340,9 +286,11 @@ void setTaskStatus(char * task_id, int status) {
   root["controller_id"] = ESP.getChipId();
   root["task_id"] = task_id;
   root["status"] = status;
+  root["event"] = "task_status";
 
   root.printTo(post_data, sizeof(post_data));
-   //queue_web_request("http://dmarkey.com:8080/controller_task_status/", post_data, "application/json");
+  webSocket.sendTXT(post_data);
+
 }
 
 
@@ -393,25 +341,25 @@ void processSwitchcmd(JsonObject& obj) {
         case 1:
           {
             sendCode(ch1off);
-            Serial.println("command ch1on executed");
+            Serial.println("command ch1off executed");
             break;
           }
         case 2:
           {
             sendCode(ch2off);
-            Serial.println("command ch2on executed");
+            Serial.println("command ch2off executed");
             break;
           }
         case 3:
           {
             sendCode(ch3off);
-            Serial.println("command ch3on executed");
+            Serial.println("command ch3off executed");
             break;
           }
         case 4:
           {
             sendCode(ch4off);
-            Serial.println("command ch4on executed");
+            Serial.println("command ch4off executed");
             break;
           }
       }
@@ -427,81 +375,61 @@ void processSwitchcmd(JsonObject& obj) {
 }
 
 
-
-void webSocketEvent(WStype_t type, uint8_t * payload, size_t lenght) {
-
-
-    switch(type) {
-        case WStype_DISCONNECTED:
-            Serial.printf("[WSc] Disconnected!\n");
-            break;
-        case WStype_CONNECTED:
-            {
-                Serial.printf("[WSc] Connected to url: %s\n",  payload);
-                sendBeacon();
-            }
-            break;
-        case WStype_TEXT:
-            Serial.printf("[WSc] get text: %s\n", payload);
-
-            // send data to back to Server
-            webSocket.sendTXT("hello", lenght);
-            break;
-        case WStype_BIN:
-            Serial.printf("[WSc] get binary lenght: %u\n", lenght);
-            hexdump(payload, lenght);
-
-            // echo data back to Server
-            webSocket.sendBIN(payload, lenght);
-            break;
-    }
-
-}
-
-/*
-void callback(char* topic, byte* payload, unsigned int length)
+void handle_task(byte* payload, unsigned int length)
 {
-
   Serial.println(millis());
-
   Serial.println("Incoming command");
   Serial.println((char *)payload);
   Serial.println(ESP.getFreeHeap(), DEC);
   char task_id[40];
+  Serial.println(ESP.getFreeHeap(), DEC);
+  DynamicJsonBuffer inJsonBuffer;
+  JsonObject& root = inJsonBuffer.parseObject((char *)payload);
+  if (!root.success()) {
+    Serial.print("Problem parsing this message:");
+    Serial.println((char *)payload);
+    return;
+  }
+  const char * command = root["name"];
+  snprintf(task_id, 40, "%s", (const char *)root["task_id"]);
+  Serial.println("Setting task status");
+  if (strcmp(command, "sockettoggle") != -1) {
+    processSwitchcmd(root);
+    setTaskStatus(task_id, 3);
+  }
 
-  if (String(topic) == commandTopic) {
-    Serial.println(ESP.getFreeHeap(), DEC);
-    DynamicJsonBuffer inJsonBuffer;
+}
 
-    JsonObject& root = inJsonBuffer.parseObject((char *)payload);
-    if (!root.success()) {
-      Serial.print("Problem parsing this message:");
-      Serial.println((char *)payload);
-      return;
-    }
 
-    const char * command = root["name"];
-    snprintf(task_id, 40, "%s", (const char *)root["task_id"]);
-    Serial.println("Setting task status");
 
-    if (strcmp(command, "sockettoggle") != -1) {
-      processSwitchcmd(root);
-      setTaskStatus(task_id, 3);
-    }
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t lenght) {
+
+
+  switch (type) {
+    case WStype_DISCONNECTED:
+      Serial.printf("[WSc] Disconnected!\n");
+      break;
+    case WStype_CONNECTED:
+      {
+        Serial.printf("[WSc] Connected to url: %s\n",  payload);
+        sendBeacon();
+      }
+      break;
+    case WStype_TEXT:
+      Serial.printf("[WSc] get text: %s\n", payload);
+      handle_task(payload, lenght);
+
+      break;
 
   }
 
-}*/
+}
 
 void readTemp() {
   DynamicJsonBuffer tempJsonBuffer;
   char post_data[128];
-  // Reading temperature or humidity takes about 250 milliseconds!
-  // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
   float h = dht.readHumidity();
-  // Read temperature as Celsius (the default)
   float t = dht.readTemperature();
-  // Check if any reads failed and exit early (to try again).
   if (isnan(h) || isnan(t)) {
     Serial.println("Failed to read from DHT sensor!");
     return;
@@ -509,8 +437,6 @@ void readTemp() {
 
   Serial.print("Temperature: ");
   Serial.println(t);
-
-
 
   JsonObject& root = tempJsonBuffer.createObject();
   root["controller_id"] = ESP.getChipId();
@@ -520,7 +446,7 @@ void readTemp() {
   root["hum"] = h;
 
   root.printTo(post_data, sizeof(post_data));
-  webSocket.sendTXT(post_data, strlen(post_data));
+  webSocket.sendTXT(post_data);
   delay(10);
 
 }
@@ -532,8 +458,8 @@ void setup(void) {
   Serial.begin(115200);
   Serial.println();
   Serial.println("Booting..");
-  pinMode(RECV_PIN, OUTPUT);
-  pinMode(rc_pin, OUTPUT);
+  pinMode(IR_RECV_PIN, OUTPUT);
+  pinMode(RF_DATA_PIN, OUTPUT);
 
   irrecv.enableIRIn();
   StaticJsonBuffer<1000> json;
@@ -568,8 +494,8 @@ void setup(void) {
   else {
     //beaconFunc();
     webSocket.onEvent(webSocketEvent);
-    webSocket.begin("192.168.1.138", 8080, "/ws");
-    
+    webSocket.begin(WS_SERVER, WS_PORT, WS_PATH);
+
     t.every(10000, readTemp);
 
   }
@@ -605,41 +531,6 @@ void sendBeacon() {
   webSocket.sendTXT(buf, strlen(buf));
 }
 
-/*void reconnect() {
-  DynamicJsonBuffer willJsonBuffer;
-  // Loop until we're reconnected
-  while (!client.connected()) {
-
-    Serial.print("Attempting MQTT connection...");
-    // Attempt to connect
-    char buf[200];
-    JsonObject& root = willJsonBuffer.createObject();
-    root["controller_id"] = ESP.getChipId();
-    root["event"] = "disconnect";
-    root["route"] = "ALL";
-    root.printTo(buf, sizeof(buf));
-    if (client.connect(mqttName.c_str(), "/admin/events", false, 0, buf)) {
-      Serial.println("connected");
-      attempt = 0;
-      // Once connected, publish an announcement...
-      client.subscribe(commandTopic.c_str());
-      Serial.print("Subscribed to ");
-      Serial.println(commandTopic);
-      sendMQTTBeacon();
-    } else {
-      attempt++;
-      if (attempt > 5) {
-        connected = false;
-        fallbackMode();
-      }
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
-    }
-  }
-}*/
 
 const char *  encoding (decode_results *results)
 {
@@ -689,22 +580,16 @@ void  dumpInfo (decode_results *results)
 
 void loop(void) {
 
-  //Serial.println("Looping!");
   if (!connected) {
     server.handleClient();
   }
   else {
 
-    /*if (!client.connected()) {
-      reconnect();
-    }*/
     decode_results  results;        // Somewhere to store the results
     if (irrecv.decode(&results)) {  // Grab an IR code
       dumpInfo(&results);           // Output the results
       irrecv.resume();              // Prepare for the next value
     }
-    //client.loop();
-    //delay(10);
     t.update();
     webSocket.loop();
 
