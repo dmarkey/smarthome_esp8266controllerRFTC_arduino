@@ -1,4 +1,6 @@
 #include <ESP8266httpUpdate.h>
+#include <ESP8266httpClient.h>
+
 #include <IRremoteESP8266.h>
 #include <Event.h>
 #include <Timer.h>
@@ -375,6 +377,12 @@ void processSwitchcmd(JsonObject& obj) {
 }
 
 
+int ota_update(JsonObject& obj){
+
+   return ESPhttpUpdate.update((const char *)obj["server"], (int)obj["port"], (const char *)obj["path"]);
+  
+}
+
 void handle_task(byte* payload, unsigned int length)
 {
   Serial.println(millis());
@@ -398,6 +406,10 @@ void handle_task(byte* payload, unsigned int length)
     setTaskStatus(task_id, 3);
   }
 
+  if (strcmp(command, "otaupdate") != -1) {
+    ota_update(root);
+    setTaskStatus(task_id, 3);
+  }
 }
 
 
