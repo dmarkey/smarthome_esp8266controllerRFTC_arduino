@@ -117,6 +117,8 @@ void sendSymbol(char i) { //Diese Funktion soll 0,1 oder x senden koennen. Wir s
 
 int connected = false;
 
+#define RF_ENABLE_PIN  24
+#define BLINK_LED_PIN  6
 
 #define MAX_CODE_CYCLES 4
 
@@ -133,31 +135,30 @@ enum {
   PLUG_B,
   PLUG_C,
   PLUG_D,
-  PLUG_MASTER,
   PLUG_LAST
 };
 
 unsigned long signals[PLUG_LAST][2][MAX_CODE_CYCLES] = {
   { /*A*/
-    {0b101111000001000101011100, 0b101100010110110110101100, 0b101110101110010001101100, 0b101101000101010100011100},
-    {0b101101010010011101111100, 0b101111100011110000101100, 0b101111110111001110001100, 0b101110111000101110111100}
+    {0b111000101101010101101100, 0b111010000001101010101100, 0b111000011011010000011100, 0b111000000010110001011100},
+    {0b111010110101111001111100, 0b111001111001000100101100, 0b111001100111100010001100, 0b111001001000000010111100}
   },
   { /*B*/
-    {0b101101110100001000110101, 0b101101101010100111100101, 0b101110011101111000000101, 0b101100100000100011110101},
-    {0b101111011001101011010101, 0b101100111011111101000101, 0b101110001100011010010101, 0b101100001111000011000101}
+    {0b111000110110011011100101, 0b111011101110111100110101, 0b111010010000001111110101, 0b111010100011011100000101},
+    {0b111001011111101111000101, 0b111011010100100110010101, 0b111011001100110111010101, 0b111011111010001001000101}
   },
   { /*C*/
-    {0b101101010010011101111110, 0b101111100011110000101110, 0b101111110111001110001110, 0b101110111000101110111110},
-    {0b101110101110010001101110, 0b101101000101010100011110, 0b101111000001000101011110, 0b101100010110110110101110}
+    {0b111010110101111001111110, 0b111001111001000100101110, 0b111001100111100010001110, 0b111001001000000010111110},
+    {0b111000101101010101101110, 0b111000011011010000011110, 0b111010000001101010101110, 0b111000000010110001011110}
   },
   { /*D*/
-    {0b101111011001101011010111, 0b101100111011111101000111, 0b101100001111000011000111, 0b101110001100011010010111},
-    {0b101101110100001000110111, 0b101100100000100011110111, 0b101101101010100111100111, 0b101110011101111000000111}
+    {0b111011111010001001000111, 0b111001011111101111000111, 0b111011010100100110010111, 0b111011001100110111010111},
+    {0b111011101110111100110111, 0b111010010000001111110111, 0b111000110110011011100111, 0b111010100011011100000111}
   },
-  { /*MASTER*/
-    {0b101111100011110000100010, 0b101110111000101110110010, 0b101101010010011101110010, 0b101111110111001110000010},
-    {0b101111000001000101010010, 0b101101000101010100010010, 0b101110101110010001100010, 0b101100010110110110100010}
-  },
+  /*{
+    {0b111010110101111001110010, 0b111001111001000100100010, 0b111001100111100010000010, 0b111001111001000100100010},
+    {0b111000011011010000010010, 0b111000101101010101100010, 0b111010000001101010100010, 0b111001111001000100100010}
+  },*/
 };
 
 boolean       onOff;
@@ -188,12 +189,10 @@ void longSync() {
 }
 
 void ActivatePlug(unsigned char PlugNo, boolean On) {
-  Serial.print("Activating Plug ");
-  Serial.println(PlugNo);
-  delayMicroseconds(1000);
   if ( PlugNo < PLUG_LAST ) {
 
     digitalWrite(RF_DATA_PIN, LOW);
+    digitalWrite(RF_ENABLE_PIN, HIGH);
     delayMicroseconds(1000);
 
     unsigned long signal = signals[PlugNo][On][swap];
@@ -213,11 +212,11 @@ void ActivatePlug(unsigned char PlugNo, boolean On) {
         sendValue(bitRead(signal, 23 - k), NORMAL_DELAY);
       }
     }
-
+    digitalWrite(RF_ENABLE_PIN, LOW);
   }
-  Serial.print("Done: ");
-  Serial.println(PlugNo);
 }
+
+
 
 String eeprom_read() {
   String tempStr;
@@ -303,6 +302,10 @@ void processSwitchcmd(JsonObject& obj) {
 
 
   bool state = obj["state"];
+  Serial.print("Socket Number:");
+  Serial.println(switch_num);
+  Serial.print("State:");
+  Serial.println(state);
 
 
   if (switch_num < 5) {
@@ -371,16 +374,16 @@ void processSwitchcmd(JsonObject& obj) {
   }
 
 
-  ActivatePlug(switch_num - 5, state);
+  ActivatePlug(switch_num - 5, !state);
 
 
 }
 
 
-int ota_update(JsonObject& obj){
+int ota_update(JsonObject& obj) {
 
-   return ESPhttpUpdate.update((const char *)obj["server"], (int)obj["port"], (const char *)obj["path"]);
-  
+  return ESPhttpUpdate.update((const char *)obj["server"], (int)obj["port"], (const char *)obj["path"]);
+
 }
 
 void handle_task(byte* payload, unsigned int length)
@@ -400,14 +403,16 @@ void handle_task(byte* payload, unsigned int length)
   }
   const char * command = root["name"];
   snprintf(task_id, 40, "%s", (const char *)root["task_id"]);
-  Serial.println("Setting task status");
+
   if (strcmp(command, "sockettoggle") != -1) {
     processSwitchcmd(root);
+    Serial.println("Setting task status");
     setTaskStatus(task_id, 3);
   }
 
   if (strcmp(command, "otaupdate") != -1) {
     ota_update(root);
+    Serial.println("Setting task status");
     setTaskStatus(task_id, 3);
   }
 }
