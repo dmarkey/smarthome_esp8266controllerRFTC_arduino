@@ -1,5 +1,5 @@
 #include <ESP8266httpUpdate.h>
-#include <ESP8266httpClient.h>
+//#include <ESP8266httpClient.h>
 
 #include <IRremoteESP8266.h>
 #include <Event.h>
@@ -35,6 +35,8 @@
 
 
 const char* mqtt_server = "dmarkey.com";
+
+bool temp_registered = false;
 
 const char* ssid = "";
 const char* password = "";
@@ -74,17 +76,6 @@ IRrecv irrecv(IR_RECV_PIN);
 #define dimmDn4 "10110000000011011000"
 
 
-
-boolean sendCode(const char code[]) { //empfange den Code in Form eines Char[]
-  sendSymbol('x');
-  for (short z = 0; z < 7; z++) { //wiederhole den Code 7x
-    for (short i = 0; i < 20; i++) { //ein Code besteht aus 20bits
-      sendSymbol(code[i]);
-    }
-    sendSymbol('x'); //da der code immer mit x/sync abschliesst, brauchen wir den nicht im code und haengen es autisch immer hinten ran.
-  }
-  return true;
-}
 void sendSymbol(char i) { //Diese Funktion soll 0,1 oder x senden koennen. Wir speichern die gewuenschte Ausgabe in der Variabel i
   switch (i) { //nun gucken wir was i ist
     case '0':
@@ -113,6 +104,19 @@ void sendSymbol(char i) { //Diese Funktion soll 0,1 oder x senden koennen. Wir s
 
   }
 }
+
+
+boolean sendCode(const char code[]) { //empfange den Code in Form eines Char[]
+  sendSymbol('x');
+  for (short z = 0; z < 7; z++) { //wiederhole den Code 7x
+    for (short i = 0; i < 20; i++) { //ein Code besteht aus 20bits
+      sendSymbol(code[i]);
+    }
+    sendSymbol('x'); //da der code immer mit x/sync abschliesst, brauchen wir den nicht im code und haengen es autisch immer hinten ran.
+  }
+  return true;
+}
+
 
 
 int connected = false;
@@ -417,6 +421,17 @@ void handle_task(byte* payload, unsigned int length)
   }
 }
 
+void sendBeacon() {
+  char buf[200];
+  DynamicJsonBuffer BeaconBuff;
+  JsonObject& root = BeaconBuff.createObject();
+  root["controller_id"] = ESP.getChipId();
+  root["event"] = "BEACON";
+  root["route"] = "All";
+  root["model"] = "SmartController-8RFT";
+  root.printTo(buf, sizeof(buf));
+  webSocket.sendTXT(buf, strlen(buf));
+}
 
 
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t lenght) {
@@ -469,6 +484,19 @@ void readTemp() {
 }
 
 
+void fallbackMode() {
+  String my_ssid = "SmartHome-";
+  my_ssid += ESP.getChipId();
+  WiFi.softAP(my_ssid.c_str(), "", false);
+  IPAddress myIP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.print(myIP);
+  server.on("/", handleRoot);
+  server.onNotFound(handleNotFound);
+  server.begin();
+
+
+}
 
 void setup(void) {
   EEPROM.begin(512);
@@ -495,14 +523,15 @@ void setup(void) {
   Serial.print("Password:");
   Serial.println(password);
   WiFi.begin(ssid, password);
-
-  for (int i = 0; i < 5; i++) {
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("WIFI CONNECTED!");
-      connected = true;
-      break;
+  if (ssid != NULL){
+    for (int i = 0; i < 5; i++) {
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("WIFI CONNECTED!");
+        connected = true;
+        break;
+      }
+      delay(5000);
     }
-    delay(5000);
   }
 
   if (!connected) {
@@ -512,41 +541,24 @@ void setup(void) {
     //beaconFunc();
     webSocket.onEvent(webSocketEvent);
     webSocket.begin(WS_SERVER, WS_PORT, WS_PATH);
-
-    t.every(10000, readTemp);
+    if(!temp_registered){
+        t.every(10000, readTemp);
+    }
+    else{
+        t.every(10000, readTemp);
+        temp_registered = true;
+    }
 
   }
 
 }
 
-void fallbackMode() {
-  String my_ssid = "SmartHome-";
-  my_ssid += ESP.getChipId();
-  WiFi.softAP(my_ssid.c_str(), "", false);
-  IPAddress myIP = WiFi.softAPIP();
-  Serial.print("AP IP address: ");
-  Serial.print(myIP);
-  server.on("/", handleRoot);
-  server.onNotFound(handleNotFound);
-  server.begin();
 
-
-}
 
 int attempt = 0;
 
 
-void sendBeacon() {
-  char buf[200];
-  DynamicJsonBuffer BeaconBuff;
-  JsonObject& root = BeaconBuff.createObject();
-  root["controller_id"] = ESP.getChipId();
-  root["event"] = "BEACON";
-  root["route"] = "All";
-  root["model"] = "SmartController-8RFT";
-  root.printTo(buf, sizeof(buf));
-  webSocket.sendTXT(buf, strlen(buf));
-}
+
 
 
 const char *  encoding (decode_results *results)
@@ -601,6 +613,9 @@ void loop(void) {
     server.handleClient();
   }
   else {
+    if (WiFi.status() != WL_CONNECTED){
+      setup();
+    }
 
     decode_results  results;        // Somewhere to store the results
     if (irrecv.decode(&results)) {  // Grab an IR code
